@@ -1,0 +1,385 @@
+---
+title: "NYC_schools_perceptions"
+author: "Bena"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Setting up
+
+
+```{r}
+library(tidyverse)
+```
+
+# Import files
+
+The data was downloaded from data.world & NYC education websites using the links below:
+  https://data.world/dataquest/nyc-schools-data/workspace/file?filename=combined.csv & 
+  https://data.cityofnewyork.us/Education/2011-NYC-School-Survey/mnz3-dyi8 
+  
+  
+```{r}
+nyc_hs <- read_csv("combined.csv")
+survey_gened <- read_tsv("masterfile11_gened_final.txt")
+survey_d75 <- read_tsv("masterfile11_d75_final.txt")
+```
+
+# Get overview of data
+
+
+```{r}
+head(nyc_hs)
+head(survey_gened)
+head(survey_d75)
+```
+
+
+```{r}
+dim(nyc_hs)
+```
+
+NYC High School data has 479 rows & 30 columns
+
+
+```{r}
+dim(survey_gened)
+```
+
+general education survey data has 1646 rows & 1942 columns
+
+```{r}
+dim(survey_d75)
+```
+
+district75 survey data has 56 rows & 1773 columns
+
+# A closer look at the data
+
+What are the school categories?
+
+
+```{r}
+schooltype_gened <- survey_gened %>%
+  pull(schooltype) %>%
+  unique
+
+print(schooltype_gened)
+```
+
+
+```{r}
+schooltype_d75 <- survey_d75 %>%
+  pull(schooltype) %>%
+  unique
+
+print(schooltype_d75)
+```
+
+School type in d75 data is "District 75 Special Education, which may refer to either high schools or elementary schools.
+
+Since nyc_hs only contains data for NYC high schools, we'll filter the school type for schooltype_gen
+We'll also remove some columns & remain with those that are necessary to do the analysis. 
+The removed columns show responses to each of the survey questions.
+
+
+```{r}
+survey_gened_select <- survey_gened %>%
+  filter(schooltype == "High School") %>%
+  select(dbn:aca_tot_11)
+
+View(survey_gened_select)
+```
+
+
+```{r}
+survey_d75_select <- survey_d75 %>%
+  select(dbn:aca_tot_11)
+
+View(survey_d75_select)
+```
+
+Remove the `bn` column since it's contained in `dbn` variable
+
+
+```{r}
+survey_gened_select <- survey_gened_select %>%
+  select(-bn)
+
+survey_d75_select <- survey_d75_select %>%
+  select(-bn)
+```
+
+# Combine the 2 dataframes for surveys
+
+
+```{r}
+survey_combined <- bind_rows(survey_gened_select, survey_d75_select)
+
+View(survey_combined)
+```
+
+Alternatively
+
+
+```{r}
+survey_combined <- survey_gened_select %>% 
+  bind_rows(survey_d75_select)
+```
+
+Since we're interested in relationships of survey_combined data with variables in the nyc_hs dataframe, it makes sense to join the survey data to nyc_hs using left_join().
+This will retain only observations in the survey dataframe that correspond to observations in nyc_hs.
+Before joining, rename `dbn` so it matches `DBN` in nyc_hs
+
+
+```{r}
+survey_combined <- survey_combined %>%
+  rename(DBN = "dbn")
+```
+
+
+```{r}
+survey_nychs <- nyc_hs %>%
+  left_join(survey_combined, by = "DBN")
+
+View(survey_nychs)
+```
+
+# Establish which correlations may be interesting to explore further
+
+
+```{r}
+correlation_matrix <- survey_nychs %>%
+  select(avg_sat_score, saf_p_11:aca_tot_11) %>%
+  cor(use = "pairwise.complete.obs")
+
+print(correlation_matrix)
+```
+
+Convert the matrix to tibble so it's easier to work with
+
+
+```{r}
+correlation_tibble <- correlation_matrix %>%
+  as_tibble(rownames = "variable")
+
+print(correlation_tibble)
+```
+
+Select variables of interest 
+moderate to strong relationships have a correlation coefficient, Pearson's r value <0.25 or >-0.25
+
+
+```{r}
+strong_cors <- correlation_tibble %>%
+  select(variable, avg_sat_score) %>%
+  filter(avg_sat_score > 0.25 | avg_sat_score < -0.25)
+
+print(strong_cors)
+```
+
+# Visualize for closer examination
+
+
+```{r}
+ggplot(data = survey_nychs,
+       aes(x = saf_t_11, y = avg_sat_score)) +
+       geom_point()
+```
+
+
+```{r}
+ggplot(data = survey_nychs,
+       aes(x = saf_s_11, y = avg_sat_score)) +
+  geom_point()
+```
+
+
+```{r}
+ggplot(data = survey_nychs,
+       aes(x = aca_s_11, y = avg_sat_score)) +
+  geom_point()
+```
+
+
+```{r}
+ggplot(data = survey_nychs,
+       aes(x = saf_tot_11, y = avg_sat_score)) +
+  geom_point()
+```
+
+Alternatively, we can iterate using function so we don't have to write 4 different code chunks
+
+
+```{r}
+create_scatter <- function(x, y) {     
+  ggplot(data = survey_nychs) + 
+    aes_string(x = x, y = y) +
+    geom_point(alpha = 0.3) +
+    theme(panel.background = element_rect(fill = "white"))
+}
+x_var <- strong_cors$variable[2:5]
+y_var <- "avg_sat_score"
+
+map2(x_var, y_var, create_scatter)
+
+print(x_var)
+```
+
+The avg_sat_score has a positive relationship with all 4 variables of interest i.e:
+"saf_t_11", "saf_s_11", "aca_s_11", "saf_tot_11"  
+In other words, the sat_score increased the more Safety and Respect score (for teachers) increased.
+Same case applied to students and all respondent groups.
+The sat_score increased the more Academic expectations score (for students) increased.
+
+# Reshape the data so it's more informative
+
+To make it easier to see responses for all metrics by all groups, we'll reshape the data from wide to long data
+
+```{r}
+survey_nychs_long <- survey_nychs %>%
+  pivot_longer(
+    cols = c(saf_p_11:aca_tot_11),       #stacks the perception columns(survey questions) together
+    names_to = "survey_question",
+    values_to = "score"
+  )
+
+View(survey_nychs_long)
+```
+
+Create 2 new variables from the survey_question column i.e. metric & respondent
+
+
+```{r}
+survey_nychs_long <- survey_nychs_long %>%
+  mutate(
+    metric = str_sub(survey_question, 1, 3),       #str_sub() function extracted infor from the survey_question variable
+    respondent = str_sub(survey_question, 4, 6)    # start & end characters could have been 5, 5 but there are 2 t's for teacher & total
+  )
+```
+
+Replace the values in metric & respondent columns with more meaningful names
+
+```{r}
+survey_nychs_long <- survey_nychs_long %>%
+  mutate(
+    metric = case_when(
+      metric == "saf" ~ "safety & respect",
+      metric == "com" ~ "communication",
+      metric == "eng" ~ "engagement",
+      metric == "aca" ~ "academic expectations"
+    )
+  )
+```
+
+
+```{r}
+survey_nychs_long <- survey_nychs_long %>%
+  mutate(
+    respondent = case_when(
+      respondent == "_p_" ~ "parent",
+      respondent == "_t_" ~ "teacher",
+      respondent == "_s_" ~ "student",
+      respondent == "_to" ~ "total"
+    )
+  )
+```
+
+Alternatively, if_else() can be used in place of case_when().
+Restore data in original long format then use if_else()
+
+
+```{r}
+survey_nychs_long <- survey_nychs %>%
+  pivot_longer(
+    cols = c(saf_p_11:aca_tot_11),       #stacks the perception columns(survey questions) together
+    names_to = "survey_question",
+    values_to = "score"
+  )
+```
+
+
+```{r}
+survey_nychs_long <- survey_nychs_long %>%
+  mutate(
+    metric = str_sub(survey_question, 1, 3),       #str_sub() function extracted infor from the survey_question variable
+    respondent = str_sub(survey_question, 4, 6)    # start & end characters could have been 5, 5 but there are 2 t's for teacher & total
+  )
+```
+
+
+```{r}
+survey_nychs_long <- survey_nychs_long %>%
+  mutate(metric = ifelse(metric  == "saf", "safety & respect", 
+                             ifelse(metric == "com", "communication",
+                                    ifelse(metric == "eng", "engagement", 
+                                           ifelse(metric == "aca", "academic expectations", "NA")))))
+```
+
+
+```{r}
+survey_nychs_long <- survey_nychs_long %>%
+  mutate(respondent = ifelse(respondent  == "_p_", "parent", 
+                                ifelse(respondent == "_t_", "teacher",
+                                       ifelse(respondent == "_s_", "student", 
+                                              ifelse(respondent == "_to", "total", "NA")))))
+```
+
+Now it's manageable to visualize the perceptions
+
+
+```{r}
+ggplot(data = survey_nychs_long,                    #visualizes all responses
+       aes(x = metric, y = score, color = respondent)) +
+       geom_boxplot()
+```
+
+
+```{r}
+survey_nychs_long %>%
+  filter(respondent != "total") %>%                 
+  ggplot(aes(x = metric, y = score, fill = respondent)) +
+  geom_boxplot()
+```
+
+
+From the visualization created with code above, it was noted that:
+
+- Scores for teachers were more spread out than those for students and parents
+- The larger & smaller scores are equally spread out for all metrics across all groups except safety & respect(among parents) and academic expectations (among students)
+- For academic expectations(among students), those that are smaller than medium value are close together.
+- For safety & respect(among parents), those that are higher than medium value are closer together.
+
+# Other codes
+
+
+```{r}
+HS <- survey_combined %>%   #checking unique entries for highschool column
+  pull(highschool) %>%
+  unique
+
+print(HS)
+```
+
+
+```{r}
+surveyed <- survey_combined %>%   #checking unique entries for studentssurveyed variable
+  pull(studentssurveyed) %>%
+  unique
+
+print(surveyed)
+```
+
+
+Investigate those which were not surveyed
+
+
+```{r}
+not_surveyed <- survey_combined %>%
+  filter(studentssurveyed == "No")
+
+View(not_surveyed)  #Just 1 obs.
+```
+
+
+
